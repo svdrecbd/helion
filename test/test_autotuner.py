@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from contextlib import nullcontext
 import csv
 from itertools import count
+import json
 import logging
 import math
 import multiprocessing as mp
@@ -67,6 +68,7 @@ from helion.runtime.settings import Settings
 datadir = Path(__file__).parent / "data"
 basic_kernels = import_path(datadir / "basic_kernels.py")
 examples_dir = Path(__file__).parent.parent / "examples"
+benchmarks_dir = Path(__file__).parent.parent / "benchmarks"
 
 
 def _get_examples_matmul():
@@ -984,6 +986,174 @@ class TestAutotuner(RefEagerTestDisabled, TestCase):
         self.assertEqual(len(compacted), 1)
         self.assertEqual(compacted[0].size_str, "_BLOCK_3")
         self.assertEqual(compacted[0].block_ids, [3])
+
+    def test_autotuner_hotpath_harness_smoke(self):
+        """The hot-path benchmark harness should run and preserve parity."""
+        harness = import_path(benchmarks_dir / "autotuner_hotpaths.py")
+        results = harness.run_all_cases(repeat=1)
+
+        self.assertTrue(results)
+        for result in results:
+            self.assertTrue(result.parity_ok, result.name)
+            self.assertGreaterEqual(result.legacy_ms, 0.0)
+            self.assertGreaterEqual(result.current_ms, 0.0)
+
+    def test_compare_refs_report_helpers(self):
+        """The branch comparison harness should summarize artifacts into markdown."""
+        compare = import_path(benchmarks_dir / "compare_refs.py")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+
+            baseline_micro = root / "baseline_micro.json"
+            baseline_micro.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "lfbo_medium",
+                            "parity_ok": True,
+                            "legacy_ms": 10.0,
+                            "current_ms": 5.0,
+                            "speedup": 2.0,
+                            "metadata": {},
+                        }
+                    ]
+                )
+            )
+            candidate_micro = root / "candidate_micro.json"
+            candidate_micro.write_text(
+                json.dumps(
+                    [
+                        {
+                            "name": "lfbo_medium",
+                            "parity_ok": True,
+                            "legacy_ms": 10.0,
+                            "current_ms": 2.5,
+                            "speedup": 4.0,
+                            "metadata": {},
+                        }
+                    ]
+                )
+            )
+            baseline_gpu = root / "baseline_gpu.json"
+            baseline_gpu.write_text(
+                json.dumps(
+                    [
+                        {
+                            "model": {"name": "vector_add"},
+                            "metric": {
+                                "name": "helion_speedup",
+                                "benchmark_values": [1.2, 1.4],
+                            },
+                        }
+                    ]
+                )
+            )
+            candidate_gpu = root / "candidate_gpu.json"
+            candidate_gpu.write_text(
+                json.dumps(
+                    [
+                        {
+                            "model": {"name": "vector_add"},
+                            "metric": {
+                                "name": "helion_speedup",
+                                "benchmark_values": [1.8, 2.0],
+                            },
+                        }
+                    ]
+                )
+            )
+            baseline_autotune = root / "baseline_autotune.json"
+            baseline_autotune.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "kernel_name": "vector_add",
+                                "input_shapes": "[1024]",
+                                "hardware": "gpu",
+                                "random_seed": 0,
+                                "search_algorithm": "lfbo",
+                                "num_configs_tested": 12,
+                                "num_compile_failures": 0,
+                                "num_accuracy_failures": 0,
+                                "num_generations": 3,
+                                "autotune_time": 4.0,
+                                "best_perf_ms": 1.2,
+                            }
+                        ]
+                    }
+                )
+            )
+            candidate_autotune = root / "candidate_autotune.json"
+            candidate_autotune.write_text(
+                json.dumps(
+                    {
+                        "runs": [
+                            {
+                                "kernel_name": "vector_add",
+                                "input_shapes": "[1024]",
+                                "hardware": "gpu",
+                                "random_seed": 0,
+                                "search_algorithm": "lfbo",
+                                "num_configs_tested": 8,
+                                "num_compile_failures": 0,
+                                "num_accuracy_failures": 0,
+                                "num_generations": 2,
+                                "autotune_time": 2.5,
+                                "best_perf_ms": 1.1,
+                            }
+                        ]
+                    }
+                )
+            )
+
+            def artifact(name: str, json_path: Path, extra_json: Path | None = None):
+                stdout = root / f"{name}.stdout"
+                stderr = root / f"{name}.stderr"
+                stdout.write_text("")
+                stderr.write_text("")
+                return compare.CommandArtifact(
+                    status="ok",
+                    command=["python", name],
+                    cwd=root,
+                    stdout_path=stdout,
+                    stderr_path=stderr,
+                    json_path=json_path,
+                    extra_json_path=extra_json,
+                )
+
+            report = root / "summary.md"
+            compare.write_report(
+                report,
+                baseline_target=compare.RepoTarget(
+                    label="baseline",
+                    repo_root=root,
+                    git_ref="main",
+                    git_sha="a" * 40,
+                    dirty=False,
+                ),
+                candidate_target=compare.RepoTarget(
+                    label="candidate",
+                    repo_root=root,
+                    git_ref="WORKTREE",
+                    git_sha="b" * 40,
+                    dirty=True,
+                ),
+                micro_baseline=artifact("baseline_micro", baseline_micro),
+                micro_candidate=artifact("candidate_micro", candidate_micro),
+                gpu_baseline=artifact(
+                    "baseline_gpu", baseline_gpu, extra_json=baseline_autotune
+                ),
+                gpu_candidate=artifact(
+                    "candidate_gpu", candidate_gpu, extra_json=candidate_autotune
+                ),
+            )
+
+            summary = report.read_text()
+            self.assertIn("lfbo_medium", summary)
+            self.assertIn("helion_speedup", summary)
+            self.assertIn("avg_autotune_time_s", summary)
 
     @skip("too slow")
     def test_lfbo_pattern_search(self):

@@ -2,6 +2,7 @@
 *.a
 *.bak
 benchmarks/tritonbench
+benchmarks/results/
 *.bzl
 .cache
 .clangd

@@ -979,7 +979,10 @@ class TestAutotuner(RefEagerTestDisabled, TestCase):
 
         with patch(
             "helion._compiler.tile_dispatch.CompileEnvironment.current",
-            return_value=SimpleNamespace(get_block_id=lambda _shape: 3),
+            return_value=SimpleNamespace(
+                get_block_id=lambda _shape: 3,
+                resolve_block_id=lambda _shape: 3,
+            ),
         ):
             compacted = dispatch._compact_shape([object()])
 
@@ -1001,6 +1004,38 @@ class TestAutotuner(RefEagerTestDisabled, TestCase):
     def test_compare_refs_report_helpers(self):
         """The branch comparison harness should summarize artifacts into markdown."""
         compare = import_path(benchmarks_dir / "compare_refs.py")
+        self.assertEqual(
+            compare.normalize_benchmark_args(["--", "--kernel", "vector_add"]),
+            [
+                "--metrics",
+                "speedup,accuracy,tflops,gbps",
+                "--input-sample-mode",
+                "equally-spaced-k",
+                "--num-inputs",
+                "20",
+                "--kernel",
+                "vector_add",
+            ],
+        )
+        self.assertEqual(
+            compare.normalize_benchmark_args([]),
+            list(compare.DEFAULT_GPU_BENCHMARK_ARGS),
+        )
+        self.assertEqual(
+            compare.normalize_benchmark_args(
+                ["--kernel", "vector_add", "--metrics", "speedup,accuracy"]
+            ),
+            [
+                "--input-sample-mode",
+                "equally-spaced-k",
+                "--num-inputs",
+                "20",
+                "--kernel",
+                "vector_add",
+                "--metrics",
+                "speedup,accuracy",
+            ],
+        )
 
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -1154,6 +1189,91 @@ class TestAutotuner(RefEagerTestDisabled, TestCase):
             self.assertIn("lfbo_medium", summary)
             self.assertIn("helion_speedup", summary)
             self.assertIn("avg_autotune_time_s", summary)
+
+    def test_compare_refs_cached_baseline_manifest(self):
+        compare = import_path(benchmarks_dir / "compare_refs.py")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            baseline_micro = root / "baseline_micro.json"
+            baseline_micro.write_text("[]")
+            baseline_stdout = root / "baseline_micro.stdout"
+            baseline_stderr = root / "baseline_micro.stderr"
+            baseline_stdout.write_text("baseline micro")
+            baseline_stderr.write_text("")
+            baseline_gpu = root / "baseline_gpu.json"
+            baseline_gpu.write_text("[]")
+            baseline_gpu_stdout = root / "baseline_gpu.stdout"
+            baseline_gpu_stderr = root / "baseline_gpu.stderr"
+            baseline_gpu_stdout.write_text("baseline gpu")
+            baseline_gpu_stderr.write_text("")
+            baseline_autotune = root / "baseline_autotune.json"
+            baseline_autotune.write_text('{"runs": []}')
+
+            micro_artifact = compare.CommandArtifact(
+                status="ok",
+                command=["python", "baseline_micro"],
+                cwd=root,
+                stdout_path=baseline_stdout,
+                stderr_path=baseline_stderr,
+                json_path=baseline_micro,
+            )
+            gpu_artifact = compare.CommandArtifact(
+                status="ok",
+                command=["python", "baseline_gpu"],
+                cwd=root,
+                stdout_path=baseline_gpu_stdout,
+                stderr_path=baseline_gpu_stderr,
+                json_path=baseline_gpu,
+                extra_json_path=baseline_autotune,
+            )
+
+            compare.write_manifest(
+                root,
+                baseline_target=compare.RepoTarget(
+                    label="baseline",
+                    repo_root=root,
+                    git_ref="main",
+                    git_sha="a" * 40,
+                    dirty=False,
+                ),
+                candidate_target=None,
+                micro_baseline=micro_artifact,
+                micro_candidate=None,
+                gpu_baseline=gpu_artifact,
+                gpu_candidate=None,
+                benchmark_args=["--kernel", "vector_add", "--num-inputs", "5"],
+                micro_repeat=3,
+            )
+
+            baseline_target, loaded_micro, loaded_gpu, metadata = (
+                compare.load_cached_baseline(root)
+            )
+            self.assertEqual(baseline_target.git_ref, "main")
+            self.assertEqual(loaded_micro.json_path, baseline_micro)
+            self.assertEqual(loaded_gpu.json_path, baseline_gpu)
+            compare.validate_cached_baseline(
+                metadata,
+                benchmark_args=["--kernel", "vector_add", "--num-inputs", "5"],
+                micro_repeat=3,
+                require_gpu=True,
+            )
+
+            with pytest.raises(ValueError, match="micro-repeat"):
+                compare.validate_cached_baseline(
+                    metadata,
+                    benchmark_args=["--kernel", "vector_add", "--num-inputs", "5"],
+                    micro_repeat=4,
+                    require_gpu=True,
+                )
+
+            with pytest.raises(ValueError, match="GPU args"):
+                compare.validate_cached_baseline(
+                    metadata,
+                    benchmark_args=["--kernel", "softmax", "--num-inputs", "5"],
+                    micro_repeat=3,
+                    require_gpu=True,
+                )
 
     @skip("too slow")
     def test_lfbo_pattern_search(self):

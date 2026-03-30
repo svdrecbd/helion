@@ -212,7 +212,7 @@ def legacy_compact_shape(
 ) -> list[Any]:
     compacted_shapes = []
     for idx, shape in enumerate(shapes):
-        block_idx = api.CompileEnvironment.current().get_block_id(shape)
+        block_idx = api.CompileEnvironment.current().resolve_block_id(shape)
         if block_idx is None:
             shape_str = dispatch._get_shape_string(shape)
             compacted_shapes.append(api.CompactedShape(shape_str, [idx], []))
@@ -450,7 +450,10 @@ def benchmark_tile_dispatch_case(
         n_strategies=n_strategies,
         repeats_per_block=repeats_per_block,
     )
-    env = SimpleNamespace(get_block_id=lambda shape: shape)
+    env = SimpleNamespace(
+        get_block_id=lambda shape: shape,
+        resolve_block_id=lambda shape: shape,
+    )
     with patch(
         "helion._compiler.tile_dispatch.CompileEnvironment.current",
         return_value=env,

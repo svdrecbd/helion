@@ -290,8 +290,8 @@ class LFBOPatternSearch(PatternSearch):
 
             for _rank in range(n_selected):
                 if selected_indices:
-                    mean_similarities = (
-                        similarity_sums[remaining_indices] / len(selected_indices)
+                    mean_similarities = similarity_sums[remaining_indices] / len(
+                        selected_indices
                     )
                     proba_minus_similarity = (
                         proba[remaining_indices]

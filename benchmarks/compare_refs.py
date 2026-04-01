@@ -1,5 +1,6 @@
+from __future__ import annotations
+
 import argparse
-from collections import defaultdict
 from dataclasses import dataclass
 import datetime as dt
 import json
@@ -10,7 +11,6 @@ import subprocess
 import sys
 import tempfile
 from typing import Any
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_NAME = "metadata.json"
@@ -237,7 +237,9 @@ def load_json(path: Path | None) -> Any:
     return json.loads(path.read_text())
 
 
-def summarize_microbench(records: list[dict[str, Any]] | None) -> dict[str, dict[str, Any]]:
+def summarize_microbench(
+    records: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
     if not records:
         return {}
     return {
@@ -251,7 +253,9 @@ def summarize_microbench(records: list[dict[str, Any]] | None) -> dict[str, dict
     }
 
 
-def summarize_gpu_records(records: list[dict[str, Any]] | None) -> dict[tuple[str, str], dict[str, float]]:
+def summarize_gpu_records(
+    records: list[dict[str, Any]] | None,
+) -> dict[tuple[str, str], dict[str, float]]:
     summary: dict[tuple[str, str], dict[str, float]] = {}
     if not records:
         return summary
@@ -344,7 +348,9 @@ def deserialize_path(raw_path: str | None, *, relative_to: Path) -> Path | None:
     return relative_to / path
 
 
-def serialize_artifact(artifact: CommandArtifact, *, relative_to: Path) -> dict[str, Any]:
+def serialize_artifact(
+    artifact: CommandArtifact, *, relative_to: Path
+) -> dict[str, Any]:
     return {
         "status": artifact.status,
         "command": artifact.command,
@@ -618,16 +624,24 @@ def write_report(
     baseline_micro = summarize_microbench(load_json(micro_baseline.json_path))
     candidate_micro = summarize_microbench(load_json(micro_candidate.json_path))
 
-    gpu_baseline_records = None if gpu_baseline is None else load_json(gpu_baseline.json_path)
-    gpu_candidate_records = None if gpu_candidate is None else load_json(gpu_candidate.json_path)
+    gpu_baseline_records = (
+        None if gpu_baseline is None else load_json(gpu_baseline.json_path)
+    )
+    gpu_candidate_records = (
+        None if gpu_candidate is None else load_json(gpu_candidate.json_path)
+    )
     gpu_baseline_summary = summarize_gpu_records(gpu_baseline_records)
     gpu_candidate_summary = summarize_gpu_records(gpu_candidate_records)
 
     autotune_baseline = (
-        {} if gpu_baseline is None else summarize_autotune(load_json(gpu_baseline.extra_json_path))
+        {}
+        if gpu_baseline is None
+        else summarize_autotune(load_json(gpu_baseline.extra_json_path))
     )
     autotune_candidate = (
-        {} if gpu_candidate is None else summarize_autotune(load_json(gpu_candidate.extra_json_path))
+        {}
+        if gpu_candidate is None
+        else summarize_autotune(load_json(gpu_candidate.extra_json_path))
     )
 
     lines = [
@@ -739,7 +753,9 @@ def main() -> int:
                 REPO_ROOT, baseline_target, output_dir, args.micro_repeat
             )
             if not args.skip_gpu:
-                gpu_baseline = run_gpu_suite(baseline_target, output_dir, benchmark_args)
+                gpu_baseline = run_gpu_suite(
+                    baseline_target, output_dir, benchmark_args
+                )
         else:
             (
                 baseline_target,

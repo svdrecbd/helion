@@ -1,13 +1,17 @@
+from __future__ import annotations
+
 import argparse
 from dataclasses import asdict
 from dataclasses import dataclass
 import json
 import math
+import operator
 from pathlib import Path
 import sys
 import time
 from types import SimpleNamespace
 from typing import Any
+from typing import Callable
 from unittest.mock import patch
 
 import numpy as np
@@ -27,6 +31,7 @@ class BenchmarkResult:
 
 @dataclass
 class RepoApi:
+    BlockIDStrategyMapping: Any
     CompileEnvironment: Any
     CompactedShape: Any
     Config: Any
@@ -45,6 +50,7 @@ def load_repo_api(repo_root: Path) -> RepoApi:
 
     from helion._compiler.compile_environment import CompileEnvironment
     from helion._compiler.device_function import DeviceFunction
+    from helion._compiler.tile_dispatch import BlockIDStrategyMapping
     from helion._compiler.tile_dispatch import TileStrategyDispatch
     from helion._compiler.tile_strategy import CompactedShape
     from helion.autotuner.heuristic_generator import PerformanceTarget
@@ -54,6 +60,7 @@ def load_repo_api(repo_root: Path) -> RepoApi:
     from helion.runtime.config import Config
 
     return RepoApi(
+        BlockIDStrategyMapping=BlockIDStrategyMapping,
         CompileEnvironment=CompileEnvironment,
         CompactedShape=CompactedShape,
         Config=Config,
@@ -92,7 +99,7 @@ class MockTileStrategy:
         return shapes
 
 
-def _time_ms(fn: Any, repeat: int) -> float:
+def _time_ms(fn: Callable[[], object], repeat: int) -> float:
     start = time.perf_counter()
     for _ in range(repeat):
         fn()
@@ -135,7 +142,7 @@ def legacy_surrogate_select(
         selected_indices.append(best_global_idx)
         remaining_indices.remove(best_global_idx)
 
-    ranked = sorted(zip(candidates, scores, strict=True), key=lambda item: item[1])[
+    ranked = sorted(zip(candidates, scores, strict=True), key=operator.itemgetter(1))[
         :n_sorted
     ]
     return [member for member, _ in ranked]
@@ -233,9 +240,7 @@ def legacy_compact_shape(
                 block_size = api.DeviceFunction.current().block_size_var(block_idx)
             if block_size is None:
                 block_size = "1"
-            compacted_shapes.append(
-                api.CompactedShape(block_size, [idx], [block_idx])
-            )
+            compacted_shapes.append(api.CompactedShape(block_size, [idx], [block_idx]))
     for strategy in dispatch.strategies:
         compacted_shapes = strategy.compact_shape(compacted_shapes)
     return compacted_shapes
@@ -338,14 +343,9 @@ def make_tile_dispatch_case(
     dispatch.strategies = [
         MockTileStrategy([2 * idx, 2 * idx + 1]) for idx in range(n_strategies)
     ]
-    dispatch.block_id_to_strategy = {
-        tuple(strategy.block_ids): strategy for strategy in dispatch.strategies
-    }
-    dispatch._block_id_to_any_strategy = {
-        block_id: strategy
-        for strategy in dispatch.strategies
-        for block_id in strategy.block_ids
-    }
+    dispatch.block_id_to_strategy = api.BlockIDStrategyMapping()
+    for strategy in dispatch.strategies:
+        dispatch.block_id_to_strategy[tuple(strategy.block_ids)] = strategy
     shapes = [
         block_id
         for block_id in range(2 * n_strategies)
@@ -383,7 +383,9 @@ def benchmark_lfbo_case(
     legacy_ms = _time_ms(
         lambda: legacy_surrogate_select(search, candidates, n_sorted), repeat
     )
-    current_ms = _time_ms(lambda: search._surrogate_select(candidates, n_sorted), repeat)
+    current_ms = _time_ms(
+        lambda: search._surrogate_select(candidates, n_sorted), repeat
+    )
     parity_ok = [c.index for c in expected] == [c.index for c in actual]
     return BenchmarkResult(
         name=name,
@@ -460,7 +462,9 @@ def benchmark_tile_dispatch_case(
     ):
         expected = legacy_compact_shape(api, dispatch, shapes)
         actual = dispatch._compact_shape(shapes)
-        legacy_ms = _time_ms(lambda: legacy_compact_shape(api, dispatch, shapes), repeat)
+        legacy_ms = _time_ms(
+            lambda: legacy_compact_shape(api, dispatch, shapes), repeat
+        )
         current_ms = _time_ms(lambda: dispatch._compact_shape(shapes), repeat)
 
     parity_ok = expected == actual
@@ -585,7 +589,9 @@ def main() -> int:
     _print_results(results)
 
     if args.json is not None:
-        args.json.write_text(json.dumps([asdict(result) for result in results], indent=2))
+        args.json.write_text(
+            json.dumps([asdict(result) for result in results], indent=2)
+        )
 
     return 0 if all(result.parity_ok for result in results) else 1
 
